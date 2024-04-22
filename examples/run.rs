@@ -1,14 +1,28 @@
-use bacpac_rs::DataSchemaModel;
-use bacpac_rs::ElementEnum;
+use std::env;
+
+use dacpac::DacPacModel;
 use quick_xml::de::from_str;
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
 
 fn main() {
-    let file = "simple.xml";
-    let contents = std::fs::read_to_string(file).expect("Something went wrong reading the file");
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::TRACE)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let model: DataSchemaModel = from_str(&contents).unwrap();
-    //println!("{:?}", model);
+    info!("Starting deserialization of XML");
 
+    let args: Vec<String> = env::args().collect();
+    let filename = &args[1];
+
+    let contents =
+        std::fs::read_to_string(filename).expect("Something went wrong reading the file");
+
+    let model: DacPacModel = from_str(&contents).unwrap();
+    println!("{:#?}", model);
+
+    /*
     for e in model.model.element {
         match &e {
             ElementEnum::SqlTable(t) => {
@@ -19,9 +33,9 @@ fn main() {
                     println!("Property: {:?}", p);
                 }
                 */
-                panic!("")
             }
             _ => {}
         }
     }
+    */
 }

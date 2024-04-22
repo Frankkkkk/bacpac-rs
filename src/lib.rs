@@ -8,17 +8,47 @@
 //! run example with:
 //!    cargo run --example flattened_enum --features="serialize"
 
-use core::str;
+use anyhow::Result;
+use core::{panic, str};
+use simple::SimpleDacPacModel;
 use std::fmt;
-use std::iter::Map;
+use std::fs::File;
+use std::io::Read;
 
 use quick_xml::de::from_str;
 use serde::de::value::MapAccessDeserializer;
-use serde::de::{Deserializer, Error, MapAccess, Visitor};
+use serde::de::{Error, MapAccess, Visitor};
 use serde::Deserialize;
+use table::SqlTable;
+
+pub mod bacpac;
+pub mod simple;
+pub mod table;
+
+/// Deserializes a DacPac `model.xml` from an XML string
+pub fn from_xml(xml: &str) -> DacPacModel {
+    let dsm: DacPacModel = from_str(xml).unwrap();
+    dsm
+}
+
+pub fn from_dacpac_file(file: &File) -> Result<DacPacModel> {
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut model_xml = archive.by_name("model.xml")?;
+
+    let mut contents = String::new();
+    model_xml.read_to_string(&mut contents).unwrap();
+
+    Ok(from_xml(contents.as_str()))
+}
+
+impl DacPacModel {
+    pub fn from_file(file: &File) -> Result<DacPacModel> {
+        from_dacpac_file(file)
+    }
+}
 
 #[derive(Debug, Deserialize, PartialEq)]
-pub struct DataSchemaModel {
+pub struct DacPacModel {
     #[serde(rename = "Model")]
     pub model: Model,
 }
@@ -44,10 +74,13 @@ pub enum ElementEnum {
     SqlRoleMembership(SqlRoleMembership),
     SqlUser(SqlUser),
     SqlTable(SqlTable),
+    SqlView(SqlView),
     SqlUniqueConstraint(SqlUniqueConstraint),
     SqlProcedure(SqlProcedure),
     SqlPermissionStatement(SqlPermissionStatement),
     SqlSchema(SqlSchema),
+    SqlExternalFileFormat(SqlExternalFileFormat),
+    SqlExternalDataSource(SqlExternalDataSource),
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -58,6 +91,7 @@ pub struct SqlDefaultConstraint {}
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct SqlPrimaryKeyConstraint {}
+
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct SqlRoleMembership {}
 
@@ -65,101 +99,22 @@ pub struct SqlRoleMembership {}
 pub struct SqlUser {}
 
 #[derive(Debug, Deserialize, PartialEq)]
-pub struct SqlTable {
-    #[serde(rename = "Property")]
-    pub properties: Property,
-    #[serde(rename = "Relationship")]
-    pub columns_relationship: SqlTableColumnRelationship,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SqlTableColumnRelationship {
-    #[serde(rename = "Entry")]
-    pub entry: Vec<SqlTableColumnRelationshipEntry>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SqlTableColumnRelationshipEntry {
-    #[serde(rename = "Element")]
-    pub element: SqlSimpleColumnTableElement,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SqlSimpleColumnTableElement {
-    #[serde(rename = "Property")]
-    pub property: Option<Property>,
-    #[serde(rename = "Relationship")]
-    pub columns: Vec<SqlSimpleColumnRelationshipEntry>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SqlSimpleColumnRelationshipEntry {
-    #[serde(rename = "Entry")]
-    pub entry: SqlSimpleColumnRelationshipEntryReference,
-}
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SqlSimpleColumnRelationshipEntryReference {
-    #[serde(rename = "Element")]
-    pub element_type_specifier: ElementTypeSpecifier,
-}
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct ElementTypeSpecifier {
-    #[serde(rename = "Property")]
-    pub property: Option<Property>,
-    #[serde(rename = "Relationship")]
-    pub type_specifier_rela: TypeSpecifierRelationship,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct TypeSpecifierRelationship {
-    #[serde(rename = "Entry")]
-    pub entry: TypeSpecifierRelationshipEntry,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct TypeSpecifierRelationshipEntry {
-    #[serde(rename = "References")]
-    pub element: TypeSpecifierRelationshipEntryElement,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct TypeSpecifierRelationshipEntryElement {
-    #[serde(rename = "@Name")]
-    pub name: String,
-}
-
-fn deserialize_sql_simple_column_type<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize, Debug)]
-    struct Relationship {
-        #[serde(rename = "Entry")]
-        entry: Entry,
-    }
-    #[derive(Deserialize, Debug)]
-    struct Entry {
-        #[serde(rename = "References")]
-        reference: Reference,
-    }
-    #[derive(Deserialize, Debug)]
-    struct Reference {
-        #[serde(rename = "@Name")]
-        name: String,
-    }
-    println!("DESERIALIZING SQL SIMPLE COLUMN TYPE");
-    let s: Reference = Deserialize::deserialize(deserializer)?;
-    println!("SQL SIMPLE COLUMN TYPE: {:#?}", s);
-    Ok("home".to_string())
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Property {
     #[serde(rename = "@Name")]
     pub name: String,
     #[serde(rename = "@Value")]
     pub value: Option<String>,
 }
+
+impl Property {
+    pub fn get_value(&self) -> String {
+        self.value.clone().unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct SqlView {}
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct SqlUniqueConstraint {}
@@ -172,6 +127,12 @@ pub struct SqlPermissionStatement {}
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct SqlSchema {}
+
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct SqlExternalFileFormat {}
+
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct SqlExternalDataSource {}
 
 impl<'de> Deserialize<'de> for ElementEnum {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -218,9 +179,12 @@ impl<'de> Deserialize<'de> for ElementEnum {
                                     Ok(ElementEnum::SqlUser(f))
                                 }
                                 "SqlTable" => {
-                                    println!("Will do table");
                                     let f = SqlTable::deserialize(mad)?;
                                     Ok(ElementEnum::SqlTable(f))
+                                }
+                                "SqlView" => {
+                                    let f = SqlView::deserialize(mad)?;
+                                    Ok(ElementEnum::SqlView(f))
                                 }
                                 "SqlUniqueConstraint" => {
                                     let f = SqlUniqueConstraint::deserialize(mad)?;
@@ -238,8 +202,16 @@ impl<'de> Deserialize<'de> for ElementEnum {
                                     let f = SqlSchema::deserialize(mad)?;
                                     Ok(ElementEnum::SqlSchema(f))
                                 }
+                                "SqlExternalFileFormat" => {
+                                    let f = SqlExternalFileFormat::deserialize(mad)?;
+                                    Ok(ElementEnum::SqlExternalFileFormat(f))
+                                }
+                                "SqlExternalDataSource" => {
+                                    let f = SqlExternalDataSource::deserialize(mad)?;
+                                    Ok(ElementEnum::SqlExternalDataSource(f))
+                                }
                                 _ => {
-                                    panic!("unknown type attribute `{}`", value);
+                                    todo!("Unknown SQL type attribute `{}`", value);
                                 }
                             }
                         }
@@ -250,5 +222,99 @@ impl<'de> Deserialize<'de> for ElementEnum {
             }
         }
         deserializer.deserialize_map(ElemVisitor)
+    }
+}
+
+impl From<&DacPacModel> for simple::SimpleDacPacModel {
+    fn from(dm: &DacPacModel) -> Self {
+        let mut tables: Vec<simple::SimpleTable> = Vec::new();
+        //let mut views: Vec<simple::SimpleView> = Vec::new();
+
+        for e in &dm.model.element {
+            #[allow(clippy::single_match)]
+            match e {
+                ElementEnum::SqlTable(t) => {
+                    tables.push(simple::SimpleTable::from(t));
+                }
+                _ => {}
+            }
+        }
+        SimpleDacPacModel { tables }
+    }
+}
+
+impl From<&SqlTable> for simple::SimpleTable {
+    fn from(st: &SqlTable) -> Self {
+        let mut columns: Vec<simple::SimpleTableColumn> = Vec::new();
+
+        for column in &st.columns_relationship.entry {
+            columns.push(simple::SimpleTableColumn::from(&column.element));
+        }
+
+        simple::SimpleTable {
+            name: simple::remove_delimiters(&st.name),
+            columns,
+        }
+    }
+}
+
+impl From<&table::SqlSimpleColumnTableElement> for simple::SimpleTableColumn {
+    fn from(st: &table::SqlSimpleColumnTableElement) -> Self {
+        let mut nullable = false;
+        st.properties.iter().flatten().for_each(|property| {
+            if property.name.as_str() == "IsNullable" {
+                nullable = property.value.as_ref().unwrap_or(&"".to_string()) != "False"
+            }
+        });
+
+        let rname = simple::remove_delimiters(&st.name);
+        let row_name_last = rname.split('.').last().unwrap();
+
+        simple::SimpleTableColumn {
+            name: row_name_last.to_string(),
+            nullable,
+            ty: simple::SimpleColumnType::from(&st.relationship.entry.element_type_specifier),
+            default: None,
+        }
+    }
+}
+
+impl From<&table::ElementTypeSpecifier> for simple::SimpleColumnType {
+    fn from(st: &table::ElementTypeSpecifier) -> Self {
+        match st.type_specifier_rela.entry.element.name.as_str() {
+            "[int]" => simple::SimpleColumnType::Int,
+            "[bigint]" => simple::SimpleColumnType::BigInt,
+            "[nvarchar]" => match &st.property {
+                Some(prop) => match prop.name.as_str() {
+                    "Length" => {
+                        let n = prop.get_value().parse::<i32>().unwrap();
+                        simple::SimpleColumnType::Nvarchar(n)
+                    }
+                    _ => simple::SimpleColumnType::Nvarchar(0),
+                },
+                None => simple::SimpleColumnType::Nvarchar(0),
+            },
+            "[varchar]" => match &st.property {
+                Some(prop) => match prop.name.as_str() {
+                    "Length" => {
+                        let n = prop.get_value().parse::<i32>().unwrap();
+                        simple::SimpleColumnType::Varchar(n)
+                    }
+                    _ => simple::SimpleColumnType::Varchar(0),
+                },
+                None => simple::SimpleColumnType::Varchar(0),
+            },
+            "[datetime2]" => match &st.property {
+                Some(prop) => match prop.name.as_str() {
+                    "Scale" => {
+                        let n = prop.get_value().parse::<i8>().unwrap();
+                        simple::SimpleColumnType::DateTime2(n)
+                    }
+                    _ => simple::SimpleColumnType::DateTime2(0),
+                },
+                None => simple::SimpleColumnType::DateTime2(0),
+            },
+            _ => panic!("Unknown type: {:#?}", st),
+        }
     }
 }

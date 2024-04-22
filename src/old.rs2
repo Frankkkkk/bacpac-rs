@@ -1,0 +1,25 @@
+
+fn deserialize_sql_simple_column_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize, Debug)]
+    struct Relationship {
+        #[serde(rename = "Entry")]
+        entry: Entry,
+    }
+    #[derive(Deserialize, Debug)]
+    struct Entry {
+        #[serde(rename = "References")]
+        reference: Reference,
+    }
+    #[derive(Deserialize, Debug)]
+    struct Reference {
+        #[serde(rename = "@Name")]
+        name: String,
+    }
+    println!("DESERIALIZING SQL SIMPLE COLUMN TYPE");
+    let s: Reference = Deserialize::deserialize(deserializer)?;
+    println!("SQL SIMPLE COLUMN TYPE: {:#?}", s);
+    Ok("home".to_string())
+}
